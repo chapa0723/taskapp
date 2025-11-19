@@ -10,6 +10,14 @@ class Task(models.Model):
   datecompleted = models.DateTimeField(null=True, blank=True)
   important = models.BooleanField(default=False)
   user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='owned_tasks')
+  assigned_user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL, # Si el empleado se va, no borra la tarea
+        null=True, 
+        blank=True,
+        related_name='assigned_tasks',
+        verbose_name='Usuario Asignado'
+    )
 
   class Meta:
     verbose_name = 'Tarea'
@@ -21,11 +29,16 @@ class Task(models.Model):
   
   def has_permission(self, user, permission_type='view'):
     """Verifica si un usuario tiene permiso sobre esta tarea"""
-    # El propietario tiene todos los permisos
+    
+    # 🚨 FIX CRÍTICO: El Administrador/Superusuario tiene permiso total
+    if user.is_superuser or user.groups.filter(name='Administrador').exists():
+        return True
+    
+    # 1. El propietario tiene todos los permisos
     if user == self.user:
       return True
     
-    # Verificar permisos explícitos
+    # 2. Verificar permisos explícitos de TaskPermission
     if permission_type == 'edit':
       return TaskPermission.objects.filter(
         task=self, 
@@ -40,6 +53,28 @@ class Task(models.Model):
       ).exists()
     
     return False
+  
+  # def has_permission(self, user, permission_type='view'):
+  #   """Verifica si un usuario tiene permiso sobre esta tarea"""
+  #   # El propietario tiene todos los permisos
+  #   if user == self.user:
+  #     return True
+    
+  #   # Verificar permisos explícitos
+  #   if permission_type == 'edit':
+  #     return TaskPermission.objects.filter(
+  #       task=self, 
+  #       user=user, 
+  #       can_edit=True
+  #     ).exists()
+    
+  #   elif permission_type == 'view':
+  #     return TaskPermission.objects.filter(
+  #       task=self, 
+  #       user=user
+  #     ).exists()
+    
+  #   return False
 
 
 class TaskPermission(models.Model):
@@ -72,3 +107,21 @@ class TaskPermission(models.Model):
   
   def __str__(self):
     return f'{self.user.username} - {self.task.title}'
+
+# Modelo para Chat / Interaccion
+
+class TaskInteraction(models.Model):
+    task = models.ForeignKey('Task', on_delete=models.CASCADE, related_name='interactions')
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, verbose_name='Empleado/Remitente')
+    message = models.TextField()
+    timestamp = models.DateTimeField(auto_now_add=True)
+    # True = Cliente (bg-success), False = Empleado (bg-secondary)
+    is_client_message = models.BooleanField(default=False) 
+
+    class Meta:
+        verbose_name = 'Interacción de Tarea'
+        verbose_name_plural = 'Interacciones de Tareas'
+        ordering = ['timestamp']
+
+    def __str__(self):
+        return f'Interacción para {self.task.title} at {self.timestamp.strftime("%H:%M")}'

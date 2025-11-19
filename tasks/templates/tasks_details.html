@@ -141,8 +141,12 @@
       <a href="{% url 'tasks' %}" class="btn btn-outline-primary">
         <i class="bi bi-arrow-left"></i> Volver a Mis Tareas
       </a>
-      <a href="{% url 'tasks_details_pdf' %}?{{ request.GET.urlencode }}" class="btn btn-danger" target="_blank">
-        <i class="bi bi-file-pdf"></i> Descargar PDF
+      <a href="{% url 'export_pdf_report' %}?report_type={{ report_type }}&days={{ context.period_days }}" 
+   class="btn btn-danger" 
+   target="_blank" 
+   title="Descargar PDF">
+    <i class="bi bi-file-pdf-fill"></i> Descargar PDF
+</a>
       </a>
     </div>
   </div>
@@ -253,14 +257,12 @@
 
           <!-- Filtro por Fecha -->
           <div class="mb-3">
-            <label for="date_from" class="form-label">Fecha Desde</label>
-            <input type="date" class="form-control" id="date_from" name="date_from" value="{{ filter_date_from }}">
-          </div>
+                  <label for="date_from" class="form-label">Fecha Desde</label>
+                  <input type="date" class="form-control" id="date_from" name="date_from" value="{{ filter_date_from }}" max="{% now "Y-m-d" %}"> </div>
 
           <div class="mb-3">
-            <label for="date_to" class="form-label">Fecha Hasta</label>
-            <input type="date" class="form-control" id="date_to" name="date_to" value="{{ filter_date_to }}">
-          </div>
+                  <label for="date_to" class="form-label">Fecha Hasta</label>
+                  <input type="date" class="form-control" id="date_to" name="date_to" value="{{ filter_date_to }}" max="{% now "Y-m-d" %}"> </div>
 
           <!-- Mantener parámetros de ordenamiento -->
           <input type="hidden" name="sort" id="sortField" value="{{ sort_by }}">

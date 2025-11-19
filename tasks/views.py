@@ -1,4 +1,5 @@
 from django.shortcuts import render, redirect, get_object_or_404
+from django.contrib import messages
 from django.contrib.auth import login, logout, authenticate
 from django.contrib.auth.models import User
 from django.db import IntegrityError
@@ -6,10 +7,25 @@ from django.utils import timezone
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
 from django.template.loader import get_template
-from .models import Task, TaskPermission
-from .forms import TaskForm
+from .models import Task, TaskPermission, TaskInteraction
+from .forms import TaskForm, TaskInteractionForm
 from .auth_forms import SignUpForm, SignInForm
 from .permissions import user_has_permission, get_user_accessible_tasks
+from .forms import TaskForm, TaskStatusOnlyForm
+from .auth_forms import SignUpForm, SignInForm
+
+from .permissions import user_has_permission, get_user_accessible_tasks, get_user_role
+
+from django.views.generic.edit import UpdateView
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.urls import reverse_lazy
+from django.views.generic.edit import DeleteView
+from django.core.exceptions import PermissionDenied
+from .mixins import RoleRequiredMixin
+from .models import Task
+from .forms import TaskStatusOnlyForm 
+from .permissions import get_user_accessible_tasks
+from .forms import TaskForm
 
 def signup(request):
     if request.method == 'GET':
@@ -42,6 +58,20 @@ def tasks_completed(request):
     return render(request, 'tasks.html', {"tasks": tasks})
 
 
+# @login_required
+# def create_task(request):
+#     if request.method == "GET":
+#         return render(request, 'create_task.html', {"form": TaskForm})
+#     else:
+#         try:
+#             form = TaskForm(request.POST)
+#             new_task = form.save(commit=False)
+#             new_task.user = request.user
+#             new_task.save()
+#             return redirect('tasks')
+#         except ValueError:
+#             return render(request, 'create_task.html', {"form": TaskForm, "error": "Error al crear la Tarea."})
+
 @login_required
 def create_task(request):
     if request.method == "GET":
@@ -49,12 +79,33 @@ def create_task(request):
     else:
         try:
             form = TaskForm(request.POST)
-            new_task = form.save(commit=False)
-            new_task.user = request.user
-            new_task.save()
-            return redirect('tasks')
+            
+            if form.is_valid(): # Agregamos la validación del formulario
+                new_task = form.save(commit=False)
+                new_task.user = request.user
+                
+                # 🚨 LA CORRECCIÓN CRÍTICA: Asignación por defecto
+                # Si el formulario no proporcionó un usuario asignado, se asigna al creador.
+                if not new_task.assigned_user:
+                    new_task.assigned_user = request.user 
+                    
+                new_task.save()
+                # 🚨 LÓGICA DE INTERACCIÓN INICIAL (Paso 2) 🚨
+                TaskInteraction.objects.create(
+                task=new_task,
+                message="Esta es la primera interacción con el cliente",
+                is_client_message=True # ¡TRUE para el cliente!
+            )
+            # --------------------------------------------
+                
+                return redirect('tasks')
+            else:
+                 # Si la validación del formulario falla (ej: campo requerido vacío)
+                 return render(request, 'create_task.html', {"form": form, "error": "Error de validación al crear la Tarea. Revisa los campos."})
+                 
         except ValueError:
-            return render(request, 'create_task.html', {"form": TaskForm, "error": "Error al crear la Tarea."})
+            # Aquí manejas errores de tipo (ej: si se envía un valor no válido para un campo)
+            return render(request, 'create_task.html', {"form": TaskForm(request.POST), "error": "Error al crear la Tarea."})
 
 
 def home(request):
@@ -84,39 +135,121 @@ def signin(request):
         # Si hay errores (incluyendo CAPTCHA)
         return render(request, 'signin.html', {"form": form})
 
+# @login_required
+# @user_has_permission('view')
+# def task_detail(request, task_id):
+#     task = get_object_or_404(Task, pk=task_id)
+    
+#     # Verificar permisos de edición
+#     can_edit = task.has_permission(request.user, 'edit')
+    
+#     if request.method == 'GET':
+#         form = TaskForm(instance=task)
+#         return render(request, 'task_detail.html', {
+#             'task': task, 
+#             'form': form,
+#             'can_edit': can_edit
+#         })
+#     else:
+#         # Verificar que el usuario puede editar
+#         if not can_edit:
+#             from django.contrib import messages
+#             messages.error(request, 'No tienes permiso para editar esta tarea.')
+#             return redirect('task_detail', task_id=task_id)
+        
+#         try:
+#             form = TaskForm(request.POST, instance=task)
+#             form.save()
+#             return redirect('tasks')
+#         except ValueError:
+#             return render(request, 'task_detail.html', {
+#                 'task': task, 
+#                 'form': form, 
+#                 'error': 'Error al actualizar la Tarea.',
+#                 'can_edit': can_edit
+#             })
+
+
 @login_required
 @user_has_permission('view')
 def task_detail(request, task_id):
     task = get_object_or_404(Task, pk=task_id)
     
-    # Verificar permisos de edición
+    # 1. Definición de Variables y Roles
     can_edit = task.has_permission(request.user, 'edit')
+    current_role = get_user_role(request.user)
     
-    if request.method == 'GET':
-        form = TaskForm(instance=task)
-        return render(request, 'task_detail.html', {
-            'task': task, 
-            'form': form,
-            'can_edit': can_edit
-        })
-    else:
-        # Verificar que el usuario puede editar
-        if not can_edit:
-            from django.contrib import messages
-            messages.error(request, 'No tienes permiso para editar esta tarea.')
-            return redirect('task_detail', task_id=task_id)
+    is_admin = current_role == 'Administrador' or request.user.is_superuser
+    is_pending = task.datecompleted is None
+    
+    is_admin_or_soporte = request.user.is_superuser or \
+                          current_role in ['Administrador', 'Soporte Técnico']
+    is_ventas_only = (current_role == 'Ventas' and not is_admin_or_soporte)
+    FormClass = TaskStatusOnlyForm if is_ventas_only else TaskForm
+    
+    # --- Inicialización de variables (se usarán en el contexto final) ---
+    interactions = task.interactions.all()
+    
+    # Inicialización de formularios: Se harán a continuación, dependiendo del método
+    form = FormClass(instance=task)
+    chat_form = TaskInteractionForm()
+
+
+    if request.method == 'POST':
         
-        try:
-            form = TaskForm(request.POST, instance=task)
-            form.save()
-            return redirect('tasks')
-        except ValueError:
-            return render(request, 'task_detail.html', {
-                'task': task, 
-                'form': form, 
-                'error': 'Error al actualizar la Tarea.',
-                'can_edit': can_edit
-            })
+        # --- 1. CASO CHAT: Prioridad si viene el campo oculto 'chat_submit' ---
+        if 'chat_submit' in request.POST:
+            chat_form = TaskInteractionForm(request.POST) # Inicializamos con datos POST
+            if chat_form.is_valid():
+                new_interaction = chat_form.save(commit=False)
+                new_interaction.task = task
+                new_interaction.user = request.user
+                new_interaction.is_client_message = False
+                new_interaction.save()
+                messages.success(request, 'Respuesta de chat enviada.')
+                return redirect('task_detail', task_id=task_id)
+            else:
+                 # Si el chat falla, el flujo continúa para mostrar errores
+                 messages.error(request, 'No se pudo enviar el mensaje. Está vacío.')
+        
+        
+        # --- 2. CASO EDICIÓN DE TAREA (El problema) ---
+        # Verificamos si el POST contiene campos de edición del formulario principal.
+        elif 'title' in request.POST or 'description' in request.POST: 
+            
+            if not can_edit:
+                messages.error(request, 'No tienes permiso para editar esta tarea.')
+                return redirect('task_detail', task_id=task_id)
+
+            form = FormClass(request.POST, instance=task) # Inicializamos con datos POST
+            if form.is_valid(): 
+                form.save()
+                messages.success(request, 'Tarea actualizada con éxito.')
+                return redirect('tasks')
+            else:
+                # Si el formulario de edición falla, el flujo continúa para mostrar errores
+                messages.error(request, 'Error al actualizar la Tarea. Revisa los campos.')
+
+    # 3. Renderizado Final (GET y POST que fallan terminan aquí)
+    # -----------------------------------------------------------
+    
+    # Si el método es GET, o si el POST falló (Edición o Chat), renderizamos la página.
+    # El formulario 'form' y 'chat_form' contendrán los datos POST y errores si hubo un fallo arriba.
+    
+    return render(request, 'task_detail.html', {
+        'task': task, 
+        'form': form, # Contiene instance=task (GET) o instance=POST+Errores
+        'chat_form': chat_form, # Contiene instancia vacía o con errores del POST
+        'interactions': interactions, # Historial de chat
+        
+        # Variables de permiso para el template
+        'can_edit': can_edit,
+        'is_pending': is_pending,
+        'is_admin': is_admin,
+        'is_superuser': request.user.is_superuser,
+        'current_role': current_role,
+    })
+    
 
 @login_required
 @user_has_permission('edit')
@@ -296,3 +429,97 @@ def tasks_details_pdf(request):
         response = HttpResponse(html_content, content_type='text/html')
         response['Content-Disposition'] = 'attachment; filename="tareas_detalle.html"'
         return response
+
+
+# @login_required
+# def task_list(request):
+#     # 🚨 FIX DE VISIBILIDAD 🚨
+#     # Solo se muestran las tareas que el usuario tiene derecho a ver
+#     tasks = get_user_accessible_tasks(request.user).order_by('-created')
+    
+#     return render(request, 'tasks.html', {'tasks': tasks})
+
+@login_required
+def task_list(request):
+    order_param = request.GET.get('order', 'desc') 
+    
+    # 🚨 CORRECCIÓN CRÍTICA: Normalizamos el parámetro de la URL 🚨
+    normalized_order = order_param.strip().lower() 
+    
+    if normalized_order == 'asc':
+        # Orden ascendente (ASC)
+        ordering_field = 'created'
+    else:
+        # Orden descendente (DESC) - Será el valor por defecto para cualquier otro valor
+        ordering_field = '-created' 
+
+    # 2. Aplicar el orden (Usamos la función que ya modificamos)
+    from .permissions import get_user_accessible_tasks
+    tasks = get_user_accessible_tasks(request.user, ordering_field) 
+    
+    # 3. Renderizar
+    return render(request, 'tasks.html', {'tasks': tasks})
+
+
+class TaskEditView(LoginRequiredMixin, RoleRequiredMixin, UpdateView):
+    model = Task
+    
+    # 1. Grupos permitidos para acceder a esta vista (el mixin lo verifica)
+    allowed_groups = ['Soporte Técnico', 'Ventas'] 
+
+    # 2. Formulario estándar (para Administradores y Soporte Técnico)
+    form_class = TaskForm 
+    
+    # 3. Formulario restringido (para Ventas)
+    ventas_form_class = TaskStatusOnlyForm
+    
+    template_name = 'task_edit.html'
+    success_url = reverse_lazy('tasks')
+
+    # A. Sobreescribir qué tareas puede ver/editar
+    def get_queryset(self):
+        
+        # 1. SIEMPRE DEVOLVER todo para roles de alto nivel.
+        if self.request.user.is_superuser or self.request.user.groups.filter(name='Administrador').exists():
+            # Forzamos a devolver el QuerySet completo del modelo, 
+            # eliminando cualquier filtro que pudiera estar aplicándose.
+            return self.model.objects.all() 
+
+        # 2. Para roles intermedios, aplicamos el filtro estricto.
+        from .permissions import get_user_accessible_tasks
+        accessible_tasks = get_user_accessible_tasks(self.request.user)
+        
+        # Filtrar el modelo base para que solo contenga IDs de tareas accesibles.
+        return self.model.objects.filter(id__in=accessible_tasks.values_list('id', flat=True))
+
+    # B. Sobreescribir qué formulario usar (Esta parte es correcta)
+    def get_form_class(self):
+        """Selecciona el formulario basado en el rol, priorizando la restricción."""
+        
+        # Si el usuario pertenece SOLAMENTE al grupo 'Ventas'
+        is_ventas_only = self.request.user.groups.filter(name='Ventas').exists() and \
+                         not self.request.user.groups.filter(name='Soporte Técnico').exists() and \
+                         not self.request.user.groups.filter(name='Administrador').exists()
+        
+        if is_ventas_only:
+            return self.ventas_form_class
+        
+        # Si es Administrador, Soporte Técnico, o un Ventas con más privilegios, usa el formulario completo
+        return self.form_class
+
+
+class TaskDeleteView(LoginRequiredMixin, DeleteView):
+    model = Task
+    success_url = reverse_lazy('tasks')
+    template_name = 'task_confirm_delete.html' # Crea este template simple
+
+    def dispatch(self, request, *args, **kwargs):
+        # 1. Chequeo de Permiso: Solo Superuser o Administrador
+        is_allowed_to_delete = request.user.is_superuser or \
+                               request.user.groups.filter(name='Administrador').exists()
+        
+        if not is_allowed_to_delete:
+            # Niega el acceso si no tiene el rol de Administrador/Superusuario
+            raise PermissionDenied("No tienes permiso para eliminar tareas.")
+            
+        return super().dispatch(request, *args, **kwargs)

@@ -5,6 +5,8 @@ from django.shortcuts import get_object_or_404, redirect
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.models import Group
+from django.db.models import Q
 from functools import wraps
 from .models import Task, TaskPermission
 
@@ -43,23 +45,41 @@ def user_has_permission(permission_type='view'):
     return decorator
 
 
-def get_user_accessible_tasks(user):
-    """
-    Retorna todas las tareas a las que un usuario tiene acceso
+# def get_user_accessible_tasks(user):
+#     """
+#     Retorna todas las tareas a las que un usuario tiene acceso
     
-    Incluye:
-    - Tareas propias del usuario
-    - Tareas compartidas con permisos
-    """
-    # Tareas propias
-    owned_tasks = Task.objects.filter(user=user)
+#     Incluye:
+#     - Tareas propias del usuario
+#     - Tareas compartidas con permisos
+#     """
+#     # Tareas propias
+#     owned_tasks = Task.objects.filter(user=user)
     
-    # Tareas compartidas con el usuario
-    shared_task_ids = TaskPermission.objects.filter(user=user).values_list('task_id', flat=True)
-    shared_tasks = Task.objects.filter(id__in=shared_task_ids)
+#     # Tareas compartidas con el usuario
+#     shared_task_ids = TaskPermission.objects.filter(user=user).values_list('task_id', flat=True)
+#     shared_tasks = Task.objects.filter(id__in=shared_task_ids)
     
-    # Combinar y retornar
-    return owned_tasks | shared_tasks
+#     # Combinar y retornar
+#     return owned_tasks | shared_tasks
+
+# permissions.py
+
+def get_user_accessible_tasks(user): # <-- Quitamos el parámetro ordering_field
+    
+    # --- Lógica de Acceso Alto (Admin/Superuser) ---
+    if user.is_superuser or user.groups.filter(name='Administrador').exists():
+        # Devolvemos todas las tareas sin ordenar (Task.objects.all())
+        return Task.objects.all()
+
+    # --- Lógica de Roles Limitados (Ventas/Soporte) ---
+    q_filter = Q(user=user) | Q(assigned_user=user)
+    q_filter |= Q(task_permissions__user=user)
+    
+    # ... (tu lógica para roles limitados va aquí) ...
+
+    # 🚨 QUITAMOS ORDER_BY Y PK. Solo devolvemos el QuerySet filtrado 🚨
+    return Task.objects.filter(q_filter).distinct()
 
 
 def can_share_task(user, task):
@@ -103,3 +123,15 @@ def share_task(task, user, can_edit=False, can_delete=False, granted_by=None):
     
     return permission
 
+def get_user_role(user):
+    """Devuelve el nombre del grupo al que pertenece un usuario."""
+    if user.is_superuser:
+        return "Desarrollador"
+    
+    # Intenta obtener el primer grupo al que pertenece
+    try:
+        group = user.groups.all().first()
+        return group.name
+    except AttributeError:
+        # El usuario no tiene grupos asignados (aunque esté logueado)
+        return "Sin Rol"
