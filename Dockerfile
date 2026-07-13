@@ -14,5 +14,5 @@ COPY . .
 RUN python manage.py makemigrations && python manage.py migrate
 
 EXPOSE 8000
-CMD ["python", "manage.py", "runserver"]
-#CMD ["gunicorn", "djangocrud.wsgi:application", "--bind", "0.0.0.0:8000"]
+#CMD ["python", "manage.py", "runserver"]
+CMD ["gunicorn", "djangocrud.wsgi:application", "--bind", "0.0.0.0:8000"]
