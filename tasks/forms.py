@@ -13,12 +13,12 @@ class TaskForm(forms.ModelForm):
         widgets = {
             'title': forms.TextInput(attrs={
                 'class': 'form-control',
-                'placeholder': 'Ingresá el título de la tarea'
+                'placeholder': 'Ingresá el título de la tarea aquí...'
             }),
             'description': forms.Textarea(attrs={
                 'class': 'form-control',
                 'rows': 4,
-                'placeholder': 'Describe la tearea aquí...'
+                'placeholder': 'Describe la tarea aquí...'
             }),
             'important': forms.CheckboxInput(attrs={
                 'class': 'form-check-input'
